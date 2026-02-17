@@ -57,4 +57,13 @@ router.use((err, req, res, next) => {
   next();
 });
 
+// 1. Route สำหรับ "ขอ" รีเซ็ตรหัสผ่าน (ส่งอีเมล)
+// URL: POST /api/auth/forgot-password
+router.post('/forgot-password', authCtrl.forgotPassword);
+
+// 2. Route สำหรับ "ตั้ง" รหัสผ่านใหม่ 
+// URL: POST /api/auth/reset-password/:token
+// :token คือตัวแปรที่จะรับมาจากลิงก์ในอีเมล
+router.post('/reset-password/:token', authCtrl.resetPassword);
+
 module.exports = router;

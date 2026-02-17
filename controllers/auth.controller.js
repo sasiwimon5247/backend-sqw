@@ -2,6 +2,9 @@ const db = require("../config/db");
 const fs = require('fs');
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require('crypto'); 
+const nodemailer = require('nodemailer'); 
+const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
 
 // ================= SIGNUP (1 Email : 1 Role Version) =================
 exports.signup = async (req, res) => {
@@ -46,7 +49,9 @@ exports.signup = async (req, res) => {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw { status: 400, message: "Invalid email format." };
         if (!/^\d{10}$/.test(cleanPhone)) throw { status: 400, message: "Phone number must be 10 digits." };
         if (!/^\d{13}$/.test(cleanIdNumber)) throw { status: 400, message: "ID card number must be 13 digits." };
-        if (password.length < 6) throw { status: 400, message: "Password must be at least 6 characters." };
+        if (!passwordRegex.test(password)) {
+            throw { status: 400, message: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number."};
+        }
 
         // 3. กำหนดสิทธิ์ (Role) และตรวจสอบ Agent
         let roleName = "buyer"; 
@@ -166,9 +171,9 @@ exports.addAdmin = async (req, res) => {
             return res.status(400).json({ error: "Invalid email format" });
         }
 
-        // 4. ดักความยาวรหัสผ่าน (Password Length >= 6)
-        if (password.length < 6) {
-            return res.status(400).json({ error: "Password must be at least 6 characters long" });
+        // 4. ดักความยาวรหัสผ่าน (Password Length >= 6และบังคับอักษรพิมเล็กพิมใหญ่)
+        if (!passwordRegex.test(password)) {
+            return res.status(400).json({ error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." });
         }
 
         // 5. ดักความยาวชื่อ (Optional - เพื่อป้องกันข้อมูลขยะ)
@@ -222,9 +227,9 @@ exports.login = async (req, res) => {
     return res.status(400).json({ error: "Invalid email format" });
   }
 
-  // 4. ดักความยาวรหัสผ่าน (ขั้นต่ำ 6 ตัว)
-  if (password.length < 6) {
-    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  // 4. ดักความยาวรหัสผ่าน (Password Length >= 6และบังคับอักษรพิมเล็กพิมใหญ่)
+  if (!passwordRegex.test(password)) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." });
   }
 
   try {
@@ -278,52 +283,160 @@ exports.login = async (req, res) => {
   }
 };
 
-// ================= GET USER COUNT =================
-exports.getUserCount = async (req, res) => {
-  try {
-    const [rows] = await db.query("SELECT COUNT(*) as total_users FROM users");
-    res.json(rows[0]); // ผลลัพธ์จะเป็น { "total_users": 15 }
-  } catch (err) {
-    res.status(500).json({ error: "Internal server error" });
-  }
+// ================= ฟังก์ชันขอรีเซ็ต (forgotPassword) =================
+exports.forgotPassword = async (req, res) => {
+    const { email } = req.body;
+
+    try {
+        // 1. ตรวจสอบว่ามี Email นี้ในระบบหรือไม่ (เช็คทั้ง 2 ตารางเหมือนตอน Login)
+        let userTable = '';
+        let idField = '';
+        
+        const [admin] = await db.query("SELECT admin_id FROM admin WHERE email = ?", [email]);
+        if (admin.length > 0) {
+            userTable = 'admin';
+            idField = 'admin_id';
+        } else {
+            const [user] = await db.query("SELECT user_id FROM users WHERE email = ?", [email]);
+            if (user.length > 0) {
+                userTable = 'users';
+                idField = 'user_id';
+            }
+        }
+
+        if (!userTable) return res.status(404).json({ error: "Email not found" });
+
+        // 2. สร้าง Token สำหรับ Reset (ใช้ crypto สร้าง String สุ่ม)
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+        const expireTime = new Date(Date.now() + 3600000); // หมดอายุใน 1 ชม.
+
+        // 3. บันทึกลง Database ในตารางที่เจอ
+        await db.query(
+            `UPDATE ${userTable} SET reset_token = ?, reset_expires = ? WHERE email = ?`,
+            [tokenHash, expireTime, email]
+        );
+
+        // 4. ส่งอีเมล (ตัวอย่างการตั้งค่า Nodemailer)
+        const transporter = nodemailer.createTransport({
+            service: 'gmail', // หรือ SMTP อื่นๆ
+            auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+        });
+
+        const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
+        await transporter.sendMail({
+            to: email,
+            subject: 'Password Reset Request',
+            html: `<p>Click <a href="${resetUrl}">here</a> to reset your password. Valid for 1 hour.</p>`
+        });
+
+        res.json({ message: "Reset link sent to your email" });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Internal server error" });
+    }
 };
 
-// ================= GET ALL USERS (WITH IMAGES) =================
-exports.getAllUsers = async (req, res) => {
-  try {
-    const sql = `
-      SELECT 
-        user_id, 
-        email, 
-        first_name, 
-        last_name, 
-        phone, 
-        address, 
-        number_id_card, 
-        id_card_image_front, 
-        id_card_image_back, 
-        selfie, 
-        number_license, 
-        license_image, 
-        agency_name, 
-        created_at 
-      FROM users
-    `;
-    
-    const [users] = await db.query(sql);
-    
-    // ส่งข้อมูลกลับไปพร้อมจำนวน
-    res.json({
-      success: true,
-      count: users.length,
-      data: users
-    });
+// ================= ฟังก์ชันตั้งรหัสผ่านใหม่ (resetPassword) =================
+exports.resetPassword = async (req, res) => {
+    const { token } = req.params; // รับจาก URL
+    const { password } = req.body; // รหัสใหม่
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
 
-  } catch (err) {
-    console.error("Admin Error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
+    // ดักความยาวรหัสผ่านเหมือนตอน Login
+    if (!password || !passwordRegex.test(password)) {
+        return res.status(400).json({ 
+            error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." 
+        });
+    }
+
+    try {
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+        // 1. ค้นหาในตาราง admin ก่อน
+        let [user] = await db.query(
+            "SELECT admin_id FROM admin WHERE reset_token = ? AND reset_expires > NOW()", 
+            [tokenHash]
+        );
+        let table = 'admin';
+        let idField = 'admin_id';
+
+        // 2. ถ้าไม่เจอใน admin ให้หาใน users
+        if (user.length === 0) {
+            [user] = await db.query(
+                "SELECT user_id FROM users WHERE reset_token = ? AND reset_expires > NOW()", 
+                [tokenHash]
+            );
+            table = 'users';
+            idField = 'user_id';
+        }
+
+        if (user.length === 0) {
+            return res.status(400).json({ error: "Token is invalid or has expired" });
+        }
+
+        // 3. Hash รหัสผ่านใหม่ และ ล้างค่า Token ออก
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await db.query(
+            `UPDATE ${table} SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE ${idField} = ?`,
+            [hashedPassword, user[0][idField]]
+        );
+
+        res.json({ message: "Password updated successfully" });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Internal server error" });
+    }
 };
+
+// // ================= GET USER COUNT =================
+// exports.getUserCount = async (req, res) => {
+//   try {
+//     const [rows] = await db.query("SELECT COUNT(*) as total_users FROM users");
+//     res.json(rows[0]); // ผลลัพธ์จะเป็น { "total_users": 15 }
+//   } catch (err) {
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+
+// // ================= GET ALL USERS (WITH IMAGES) =================
+// exports.getAllUsers = async (req, res) => {
+//   try {
+//     const sql = `
+//       SELECT 
+//         user_id, 
+//         email, 
+//         first_name, 
+//         last_name, 
+//         phone, 
+//         address, 
+//         number_id_card, 
+//         id_card_image_front, 
+//         id_card_image_back, 
+//         selfie, 
+//         number_license, 
+//         license_image, 
+//         agency_name, 
+//         created_at 
+//       FROM users
+//     `;
+    
+//     const [users] = await db.query(sql);
+    
+//     // ส่งข้อมูลกลับไปพร้อมจำนวน
+//     res.json({
+//       success: true,
+//       count: users.length,
+//       data: users
+//     });
+
+//   } catch (err) {
+//     console.error("Admin Error:", err);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
 
 
 
