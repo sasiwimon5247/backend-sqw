@@ -28,8 +28,8 @@ router.get("/me", auth, (req, res) => {
 });
 
 // ================= ADMIN ONLY =================
-router.get("/admin/users", auth, role("admin"), authCtrl.getAllUsers);
-router.get("/admin/stats", auth, role("admin"), authCtrl.getUserCount);
+// router.get("/admin/users", auth, role("admin"), authCtrl.getAllUsers);
+// router.get("/admin/stats", auth, role("admin"), authCtrl.getUserCount);
 
 // ================= ROLE SPECIFIC =================
 router.get("/investor-dashboard", auth, role("investor"), (req, res) => {
