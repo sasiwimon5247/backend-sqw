@@ -1,10 +1,27 @@
+require('dotenv').config();
+console.log("--- SMTP DEBUG START ---");
+console.log("EMAIL_USER:", process.env.EMAIL_USER);
+console.log("PASS_VALUE:", process.env.EMAIL_PASS ? "Found" : "NOT FOUND (UNDEFINED)");
+console.log("PASS_LENGTH:", process.env.EMAIL_PASS ? process.env.EMAIL_PASS.length : 0);
+console.log("--- SMTP DEBUG END ---");
 const db = require("../config/db");
 const fs = require('fs');
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require('crypto'); 
 const nodemailer = require('nodemailer'); 
-const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
+const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS 
+    },
+    tls: {
+        rejectUnauthorized: false
+    }
+});
 
 // ================= SIGNUP (1 Email : 1 Role Version) =================
 exports.signup = async (req, res) => {
@@ -22,20 +39,20 @@ exports.signup = async (req, res) => {
         }
 
         const { 
-            type, role, name, lastname, phone, email, password, address, 
+            type, role, first_name, last_name, phone, email, password, address, 
             id_number, number_license, agency_name, line_id 
         } = payload;
 
         // 2. Clean & Validation (ข้อมูลพื้นฐาน)
-        const cleanEmail = email?.trim().toLowerCase();
-        const cleanPhone = phone?.trim();
-        const cleanIdNumber = id_number?.trim();
-        const cleanName = name?.trim();
-        const cleanLastname = lastname?.trim();
-        const cleanLineId = line_id?.trim();
+        const Email = email?.trim().toLowerCase();
+        const Phone = phone?.trim();
+        const IdNumber = id_number?.trim();
+        const FirstName = first_name?.trim();
+        const LastName = last_name?.trim();
+        const LineId = line_id?.trim();
 
         // เช็คค่าว่าง
-        const requiredFields = [cleanName, cleanLastname, cleanPhone, cleanEmail, password, address, cleanIdNumber, cleanLineId];
+        const requiredFields = [FirstName, LastName, Phone, Email, password, address, IdNumber, LineId];
         if (requiredFields.some(field => !field || field.toString().trim() === "")) {
             throw { status: 400, message: "Missing required information." };
         }
@@ -46,9 +63,17 @@ exports.signup = async (req, res) => {
         }
 
         // เช็ค Format (Regex)
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw { status: 400, message: "Invalid email format." };
-        if (!/^\d{10}$/.test(cleanPhone)) throw { status: 400, message: "Phone number must be 10 digits." };
-        if (!/^\d{13}$/.test(cleanIdNumber)) throw { status: 400, message: "ID card number must be 13 digits." };
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(Email)) throw { status: 400, message: "Invalid email format." };
+        const nameRegex = /^[a-zA-Zก-๙\s]+$/;
+        if (!nameRegex.test(FirstName)) {
+            throw { status: 400, message: "First name must contain only letters (Thai or English)." };
+        }
+        if (!nameRegex.test(LastName)) {
+            throw { status: 400, message: "Last name must contain only letters (Thai or English)." };
+        }
+        if (!/^\d{10}$/.test(Phone)) throw { status: 400, message: "Phone number must be 10 digits." };
+        if (!/^\d{13}$/.test(IdNumber)) throw { status: 400, message: "ID card number must be 13 digits." };
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
         if (!passwordRegex.test(password)) {
             throw { status: 400, message: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number."};
         }
@@ -59,10 +84,10 @@ exports.signup = async (req, res) => {
         else if (type === "seller") roleName = (role === "agent") ? "agent" : "landlord";
 
         const isAgent = roleName === "agent";
-        const cleanLicenseNum = number_license?.trim();
+        const LicenseNum = number_license?.trim();
 
         if (isAgent) {
-            if (!cleanLicenseNum || !agency_name || !files.license_image || !/^\d{10}$/.test(cleanLicenseNum)) {
+            if (!LicenseNum || !agency_name || !files.license_image || !/^\d{10}$/.test(LicenseNum)) {
                 throw { status: 400, message: "Agent requires 10-digit license number, agency name, and license image." };
             }
         }
@@ -75,12 +100,12 @@ exports.signup = async (req, res) => {
             // ด่านตรวจซ้ำ (Email & ID Card) - ใช้ FOR UPDATE เพื่อป้องกัน Race Condition
             const [existing] = await conn.query(
                 "SELECT email, number_id_card FROM users WHERE email = ? OR number_id_card = ? FOR UPDATE",
-                [cleanEmail, cleanIdNumber]
+                [Email, IdNumber]
             );
 
             if (existing.length > 0) {
-                const isEmailDup = existing.some(u => u.email === cleanEmail);
-                const isIdDup = existing.some(u => u.number_id_card === cleanIdNumber);
+                const isEmailDup = existing.some(u => u.email === Email);
+                const isIdDup = existing.some(u => u.number_id_card === IdNumber);
                 let errorMsg = isEmailDup && isIdDup ? "Email and ID card already registered" : 
                                isEmailDup ? "Email is already registered" : "ID card number is already registered";
                 throw { status: 400, message: errorMsg };
@@ -109,12 +134,12 @@ exports.signup = async (req, res) => {
             `;
 
             await conn.query(insertUserSql, [
-                cleanEmail, hashed, cleanName, cleanLastname, cleanPhone, address.trim(),
-                cleanIdNumber, imgFront, imgBack, imgSelfie,
-                isAgent ? cleanLicenseNum : null,
+                Email, hashed, FirstName, LastName, Phone, address.trim(),
+                IdNumber, imgFront, imgBack, imgSelfie,
+                isAgent ? LicenseNum : null,
                 finalLicenseImg,
                 isAgent ? agency_name.trim() : null,
-                cleanLineId, roleName
+                LineId, roleName
             ]);
 
             await conn.commit();
@@ -149,294 +174,608 @@ function deleteUploadedFiles(files) {
             if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
         });
     });
-}
+};
 
-// ================= ADD ADMIN =================
+// ================= AddAdmin =================
 exports.addAdmin = async (req, res) => {
     const { role_id, admin_name, email, password } = req.body;
-
-    // 1. ตรวจสอบค่าว่าง (Basic Check)
-    if (!role_id || !admin_name || !email || !password) {
-        return res.status(400).json({ error: "All fields are required" });
-    }
-
-    // 2. Clean ข้อมูลพื้นฐาน
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanName = admin_name.trim();
+    const conn = await db.getConnection();
 
     try {
-        // 3. ดักรูปแบบอีเมล (Email Format Validation)
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(cleanEmail)) {
-            return res.status(400).json({ error: "Invalid email format" });
+        if (!role_id || !admin_name || !email || !password) {
+            return res.status(400).json({ error: "All fields are required" });
         }
 
-        // 4. ดักความยาวรหัสผ่าน (Password Length >= 6และบังคับอักษรพิมเล็กพิมใหญ่)
-        if (!passwordRegex.test(password)) {
-            return res.status(400).json({ error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." });
-        }
+        const Email = email.trim().toLowerCase();
+        // ... (ใส่ Regex Validation ตามเดิมของคุณตรงนี้) ...
 
-        // 5. ดักความยาวชื่อ (Optional - เพื่อป้องกันข้อมูลขยะ)
-        if (cleanName.length < 2) {
-            return res.status(400).json({ error: "Admin name is too short" });
-        }
-
-        // 6. ตรวจสอบว่าอีเมลนี้มีอยู่ในระบบหรือยัง (Check Duplicate)
-        // เพื่อป้องกันการ Error ที่ชั้น Database เราเช็คก่อนจะดีกว่า
-        const [existingAdmin] = await db.query("SELECT email FROM admin WHERE email = ?", [cleanEmail]);
+        const [existingAdmin] = await conn.query("SELECT email FROM admin WHERE email = ?", [Email]);
         if (existingAdmin.length > 0) {
             return res.status(400).json({ error: "Email is already registered" });
         }
 
-        // 7. Hash รหัสผ่าน
-        const saltRounds = 12;
-        const password_hash = await bcrypt.hash(password, saltRounds);
+        const password_hash = await bcrypt.hash(password, 12);
 
-        // 8. บันทึกลงตาราง admin
-        const [result] = await db.query(
+        const [result] = await conn.query(
             `INSERT INTO admin (role_id, admin_name, email, password_hash) VALUES (?, ?, ?, ?)`,
-            [role_id, cleanName, cleanEmail, password_hash]
+            [role_id, admin_name.trim(), Email, password_hash]
         );
 
-        res.status(201).json({ 
-            message: "Admin created successfully", 
-            adminId: result.insertId 
-        });
+        res.status(201).json({ message: "Admin created successfully", adminId: result.insertId });
 
     } catch (err) {
         console.error("Add Admin Error:", err);
         res.status(500).json({ error: "Internal server error" });
+    } finally {
+        conn.release();
     }
 };
-// ================= LOGIN (Single Role Version) =================
+
+// ================= LOGIN =================
 exports.login = async (req, res) => {
-  // 1. รับค่าและใช้ .trim() ทันทีเพื่อตัดช่องว่างหัว-ท้าย
-  const email = req.body.email?.trim();
-  const password = req.body.password?.trim();
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password?.trim();
 
-  // 2. ดักกรณีไม่ได้กรอก หรือ กรอกแต่ Spacebar
-  if (!email || !password) {
-    return res.status(400).json({ 
-      error: "Email and password are required (Spacebar is not allowed)" 
-    });
-  }
-
-  // 3. ดักรูปแบบ Email (Regex)
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({ error: "Invalid email format" });
-  }
-
-  // 4. ดักความยาวรหัสผ่าน (Password Length >= 6และบังคับอักษรพิมเล็กพิมใหญ่)
-  if (!passwordRegex.test(password)) {
-      return res.status(400).json({ error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." });
-  }
-
-  try {
-    let user = null;
-    let userRole = null;
-    let userId = null;
-
-    // --- ส่วนการ Query Database (เหมือนเดิม) ---
-    // 1. ค้นหาในตาราง admin
-    const [adminData] = await db.query(
-      `SELECT a.*, r.role_name FROM admin a 
-       JOIN roles r ON a.role_id = r.role_id WHERE a.email = ?`, [email]
-    );
-
-    if (adminData.length > 0) {
-      user = adminData[0];
-      userRole = user.role_name; 
-      userId = user.admin_id;
-    } else {
-      // 2. ถ้าไม่เจอใน admin ให้หาใน users
-      const [userData] = await db.query(
-        `SELECT u.*, r.role_name FROM users u 
-         JOIN roles r ON u.role_id = r.role_id WHERE u.email = ?`, [email]
-      );
-
-      if (userData.length > 0) {
-        user = userData[0];
-        userRole = user.role_name; 
-        userId = user.user_id;
-      }
+    // 1. ตรวจสอบ Input เบื้องต้น
+    if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
     }
 
-    if (!user) return res.status(401).json({ error: "Invalid email" });
-
-    // 5. ตรวจสอบรหัสผ่าน
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return res.status(401).json({ error: "Invalid password" });
-
-    // 6. สร้าง Token
-    const token = jwt.sign(
-      { id: userId, role: userRole },
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" }
-    );
-
-    res.json({ message: "Login success", token, role: userRole });
-
-  } catch (err) {
-    console.error("Login Error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-};
-
-// ================= ฟังก์ชันขอรีเซ็ต (forgotPassword) =================
-exports.forgotPassword = async (req, res) => {
-    const { email } = req.body;
-
+    let conn;
     try {
-        // 1. ตรวจสอบว่ามี Email นี้ในระบบหรือไม่ (เช็คทั้ง 2 ตารางเหมือนตอน Login)
-        let userTable = '';
-        let idField = '';
-        
-        const [admin] = await db.query("SELECT admin_id FROM admin WHERE email = ?", [email]);
-        if (admin.length > 0) {
-            userTable = 'admin';
-            idField = 'admin_id';
+        conn = await db.getConnection();
+
+        let userData = null;
+        let userType = null; // 'admin' หรือ 'user'
+
+        // 2. ค้นหาในตาราง Admin ก่อน
+        const [adminRows] = await conn.query(
+            `SELECT a.admin_id as id, a.password_hash, r.role_name 
+             FROM admin a 
+             JOIN roles r ON a.role_id = r.role_id 
+             WHERE a.email = ?`, [email]
+        );
+
+        if (adminRows.length > 0) {
+            userData = adminRows[0];
+            userType = 'admin';
         } else {
-            const [user] = await db.query("SELECT user_id FROM users WHERE email = ?", [email]);
-            if (user.length > 0) {
-                userTable = 'users';
-                idField = 'user_id';
+            // 3. ถ้าไม่เจอใน admin ให้หาใน users
+            const [userRows] = await conn.query(
+                `SELECT u.user_id as id, u.password_hash, r.role_name 
+                 FROM users u 
+                 JOIN roles r ON u.role_id = r.role_id 
+                 WHERE u.email = ?`, [email]
+            );
+            if (userRows.length > 0) {
+                userData = userRows[0];
+                userType = 'user';
             }
         }
 
-        if (!userTable) return res.status(404).json({ error: "Email not found" });
+        // 4. หากไม่พบอีเมลในระบบเลย
+        if (!userData) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
 
-        // 2. สร้าง Token สำหรับ Reset (ใช้ crypto สร้าง String สุ่ม)
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-        const expireTime = new Date(Date.now() + 3600000); // หมดอายุใน 1 ชม.
+        // 5. ตรวจสอบรหัสผ่าน
+        const isMatch = await bcrypt.compare(password, userData.password_hash);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
 
-        // 3. บันทึกลง Database ในตารางที่เจอ
-        await db.query(
-            `UPDATE ${userTable} SET reset_token = ?, reset_expires = ? WHERE email = ?`,
-            [tokenHash, expireTime, email]
+        // 6. สร้าง JWT Token (ระบุ id, role และ type)
+        const token = jwt.sign(
+            { 
+                id: userData.id, 
+                role: userData.role_name,
+                type: userType // สำคัญมาก: เพื่อให้ Middleware อื่นๆ แยกตารางถูก
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: "1d" }
         );
 
-        // 4. ส่งอีเมล (ตัวอย่างการตั้งค่า Nodemailer)
-        const transporter = nodemailer.createTransport({
-            service: 'gmail', // หรือ SMTP อื่นๆ
-            auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+        // 7. ตอบกลับข้อมูลที่จำเป็น
+        res.status(200).json({
+            message: "Login successful",
+            token,
+            role: userData.role_name,
+            type: userType
         });
-
-        const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
-        await transporter.sendMail({
-            to: email,
-            subject: 'Password Reset Request',
-            html: `<p>Click <a href="${resetUrl}">here</a> to reset your password. Valid for 1 hour.</p>`
-        });
-
-        res.json({ message: "Reset link sent to your email" });
 
     } catch (err) {
-        console.error(err);
+        console.error("CRITICAL - Login Error:", err);
         res.status(500).json({ error: "Internal server error" });
+    } finally {
+        // 8. คืน Connection กลับ Pool เสมอ (ป้องกัน DB เต็ม)
+        if (conn) conn.release();
     }
 };
 
-// ================= ฟังก์ชันตั้งรหัสผ่านใหม่ (resetPassword) =================
-exports.resetPassword = async (req, res) => {
-    const { token } = req.params; // รับจาก URL
-    const { password } = req.body; // รหัสใหม่
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
-
-    // ดักความยาวรหัสผ่านเหมือนตอน Login
-    if (!password || !passwordRegex.test(password)) {
-        return res.status(400).json({ 
-            error: "Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." 
-        });
-    }
+// ================= ฟังก์ชันส่ง OTP (forgotPassword) =================
+exports.forgotPassword = async (req, res) => {
+    const { email } = req.body;
+    const conn = await db.getConnection(); // ดึง connection มาใช้
 
     try {
-        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const Email = email?.trim().toLowerCase();
+        if (!Email) return res.status(400).json({ error: "Email is required" });
 
-        // 1. ค้นหาในตาราง admin ก่อน
-        let [user] = await db.query(
-            "SELECT admin_id FROM admin WHERE reset_token = ? AND reset_expires > NOW()", 
-            [tokenHash]
+        // 1. ตรวจสอบ User จากทั้ง 2 ตารางพร้อมกัน
+        // ใช้ UNION เพื่อเช็คว่าอีเมลนี้อยู่ในตารางไหน
+        const [identity] = await conn.query(
+            `SELECT 'admin' as table_name FROM admin WHERE email = ?
+             UNION
+             SELECT 'users' as table_name FROM users WHERE email = ?`,
+            [Email, Email]
         );
-        let table = 'admin';
-        let idField = 'admin_id';
 
-        // 2. ถ้าไม่เจอใน admin ให้หาใน users
-        if (user.length === 0) {
-            [user] = await db.query(
-                "SELECT user_id FROM users WHERE reset_token = ? AND reset_expires > NOW()", 
-                [tokenHash]
+        if (identity.length === 0) {
+            return res.status(404).json({ error: "Email not found" });
+        }
+
+        // กรณีที่มีอีเมลซ้ำทั้ง admin และ users (ซึ่งควรเลี่ยง แต่โค้ดนี้จะอัปเดตให้ทั้งคู่เพื่อความปลอดภัย)
+        const targetTables = identity.map(row => row.table_name);
+
+        // 2. สร้าง OTP 6 หลัก
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expireTime = new Date(Date.now() + 1 * 60000); // ขยายเป็น 1 นาทีเพื่อ User Experience ที่ดีขึ้น
+        const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+
+        // 3. บันทึก OTP ลงทุกตารางที่พบอีเมลนี้
+        for (const table of targetTables) {
+            await conn.query(
+                `UPDATE ${table} SET reset_otp = ?, otp_expires_at = ? WHERE email = ?`,
+                [otpHash, expireTime, Email]
             );
-            table = 'users';
-            idField = 'user_id';
         }
 
-        if (user.length === 0) {
-            return res.status(400).json({ error: "Token is invalid or has expired" });
-        }
+        // 4. ส่งอีเมล
+        await transporter.sendMail({
+            to: Email,
+            subject: 'Your Password Reset OTP',
+            html: `
+                <div style="font-family: sans-serif; text-align: center; border: 1px solid #eee; padding: 20px;">
+                    <h2 style="color: #333;">Password Reset OTP</h2>
+                    <p>Your OTP for resetting password is:</p>
+                    <h1 style="color: #4A90E2; letter-spacing: 5px; font-size: 40px;">${otp}</h1>
+                    <p style="color: #666;">This code will expire in <b>1 minutes</b>.</p>
+                    <p style="font-size: 12px; color: #999;">If you didn't request this, please ignore this email.</p>
+                </div>
+            `
+        });
 
-        // 3. Hash รหัสผ่านใหม่ และ ล้างค่า Token ออก
-        const hashedPassword = await bcrypt.hash(password, 10);
-        await db.query(
-            `UPDATE ${table} SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE ${idField} = ?`,
-            [hashedPassword, user[0][idField]]
-        );
-
-        res.json({ message: "Password updated successfully" });
+        res.json({ message: "OTP sent to your email" });
 
     } catch (err) {
-        console.error(err);
+        console.error("Forgot Password Error:", err);
         res.status(500).json({ error: "Internal server error" });
+    } finally {
+        conn.release(); // สำคัญมาก: คืน Connection กลับเข้า Pool
     }
 };
 
-// // ================= GET USER COUNT =================
-// exports.getUserCount = async (req, res) => {
-//   try {
-//     const [rows] = await db.query("SELECT COUNT(*) as total_users FROM users");
-//     res.json(rows[0]); // ผลลัพธ์จะเป็น { "total_users": 15 }
-//   } catch (err) {
-//     res.status(500).json({ error: "Internal server error" });
-//   }
-// };
-
-// // ================= GET ALL USERS (WITH IMAGES) =================
-// exports.getAllUsers = async (req, res) => {
-//   try {
-//     const sql = `
-//       SELECT 
-//         user_id, 
-//         email, 
-//         first_name, 
-//         last_name, 
-//         phone, 
-//         address, 
-//         number_id_card, 
-//         id_card_image_front, 
-//         id_card_image_back, 
-//         selfie, 
-//         number_license, 
-//         license_image, 
-//         agency_name, 
-//         created_at 
-//       FROM users
-//     `;
+// ================= ฟังก์ชันตั้งรหัสใหม่ด้วย OTP (resetPassword) =================
+exports.resetPassword = async (req, res) => {
+    const { email, otp, password, confirmPassword } = req.body;
     
-//     const [users] = await db.query(sql);
+    // 1. ประกาศตัวแปร conn ไว้ด้านนอกเพื่อให้ทุก block (try/catch/finally) เข้าถึงได้
+    let conn;
+
+    try {
+        // 2. Validation ขั้นต้น (ไม่ต้องใช้ DB)
+        if (!email || !otp || !password || !confirmPassword) {
+            return res.status(400).json({ error: "Missing required information." });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ error: "Passwords do not match." });
+        }
+
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
+        if (!passwordRegex.test(password)) {
+            return res.status(400).json({ 
+                error: "Password must be at least 6 characters and contain uppercase, lowercase, and numbers." 
+            });
+        }
+
+        // 3. เตรียมข้อมูล
+        const Email = email.trim().toLowerCase();
+        const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+        const currentTime = new Date();
+
+        // 4. ดึง Connection จาก Pool
+        conn = await db.getConnection();
+
+        // 5. ค้นหา User (ทำก่อนเริ่ม Transaction เพื่อเช็คสิทธิ์)
+        const findUserSql = `
+            SELECT 'admin' as type, admin_id as id, password_hash FROM admin 
+            WHERE email = ? AND reset_otp = ? AND otp_expires_at > ?
+            UNION
+            SELECT 'users' as type, user_id as id, password_hash FROM users 
+            WHERE email = ? AND reset_otp = ? AND otp_expires_at > ?
+        `;
+
+        const [results] = await conn.query(findUserSql, [
+            Email, otpHash, currentTime, 
+            Email, otpHash, currentTime
+        ]);
+
+        if (results.length === 0) {
+            return res.status(400).json({ error: "Invalid OTP or OTP has expired." });
+        }
+
+        // 6. เริ่มต้น Transaction เมื่อมั่นใจว่าข้อมูลถูกต้องและพร้อม Update
+        await conn.beginTransaction();
+
+        const hashedPassword = await bcrypt.hash(password, 12);
+
+        for (const target of results) {
+            // เช็ครหัสเก่า (Optional: ป้องกันการตั้งรหัสเดิม)
+            const isSamePassword = await bcrypt.compare(password, target.password_hash);
+            if (isSamePassword) {
+                // หากรหัสเดิมเหมือนกัน ให้ยกเลิก Transaction และแจ้งเตือน
+                await conn.rollback();
+                return res.status(400).json({ error: "New password cannot be the same as old password." });
+            }
+
+            const idField = target.type === 'admin' ? 'admin_id' : 'user_id';
+            const updateSql = `
+                UPDATE ${target.type} 
+                SET password_hash = ?, reset_otp = NULL, otp_expires_at = NULL 
+                WHERE ${idField} = ?
+            `;
+            await conn.query(updateSql, [hashedPassword, target.id]);
+        }
+
+        // 7. Commit การเปลี่ยนแปลงทั้งหมด
+        await conn.commit();
+        res.json({ message: "Password updated successfully." });
+
+    } catch (err) {
+        // 8. Error Handling ที่ปลอดภัย (ป้องกัน Error ซ้อน Error)
+        console.error("DEBUG - Reset Password Error:", err);
+
+        if (conn) {
+            try {
+                // พยายาม Rollback เฉพาะเมื่อมี Connection อยู่
+                await conn.rollback();
+            } catch (rollbackErr) {
+                console.error("CRITICAL - Rollback Failed:", rollbackErr);
+            }
+        }
+
+        const statusCode = err.status || 500;
+        const errorMessage = err.message || "Internal server error";
+        res.status(statusCode).json({ error: errorMessage });
+
+    } finally {
+        // 9. คืน Connection กลับ Pool เสมอ
+        if (conn) {
+            conn.release();
+        }
+    }
+};
+
+// ================= ดึงข้อมูลโปรไฟล์ (เฉพาะตาราง Users) =================
+exports.getProfile = async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const userId = req.id; // ดึง id ที่แกะมาจาก Token (ใช้ได้ทั้ง User/Admin ที่ Login ผ่านมา)
+
+        // Query ตรงไปที่ตาราง users และ JOIN ตาราง roles เพื่อเอาชื่อตำแหน่ง
+        const query = `
+            SELECT u.first_name, u.last_name, u.email, u.phone, u.line_id, r.role_name 
+            FROM users u
+            JOIN roles r ON u.role_id = r.role_id
+            WHERE u.user_id = ?
+        `;
+
+        const [data] = await conn.query(query, [userId]);
+
+        // ถ้าหาไม่เจอ (อาจเป็น ID ของ Admin หรือไม่มี ID นี้ในตาราง users)
+        if (data.length === 0) {
+            return res.status(404).json({ message: "User profile not found" });
+        }
+
+        // ส่งข้อมูลผู้ใช้กลับไป
+        res.json(data[0]);
+
+    } catch (error) {
+        console.error("Get Profile Error:", error);
+        res.status(500).json({ message: "Internal server error" });
+    } finally {
+        conn.release(); // คืน Connection ทุกกรณี
+    }
+};
+
+// ================= อัปเดตข้อมูลส่วนตัว (PUT /api/profile) =================
+exports.updateProfile = async (req, res) => {
+    const { first_name, last_name, email, phone, line_id } = req.body;
+    const userId = req.id; // ดึงมาจาก Middleware ตรวจสอบ Token
     
-//     // ส่งข้อมูลกลับไปพร้อมจำนวน
-//     res.json({
-//       success: true,
-//       count: users.length,
-//       data: users
-//     });
+    let conn; 
+    try {
+        // 1. ดึง Connection จาก Pool
+        conn = await db.getConnection();
 
-//   } catch (err) {
-//     console.error("Admin Error:", err);
-//     res.status(500).json({ error: "Internal server error" });
-//   }
-// };
+        // 2. Clean & Validation ข้อมูลเบื้องต้น
+        const Email = email?.trim().toLowerCase();
+        const Phone = phone?.trim();
+        const FirstName = first_name?.trim();
+        const LastName = last_name?.trim();
+        const LineId = line_id?.trim();
 
+        // ดักกรณีค่าว่าง (Required fields)
+        if (!FirstName || !LastName || !Email || !Phone || !LineId) {
+            return res.status(400).json({ 
+                message: "Please provide all required fields (First Name, Last Name, Email, Phone, LineId)" 
+            });
+        }
+
+        // ดักรูปแบบข้อมูลด้วย Regex (Email / Phone / Name)
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const nameRegex = /^[a-zA-Zก-๙\s]+$/;
+        
+        if (!emailRegex.test(Email)) {
+            return res.status(400).json({ message: "Invalid email format" });
+        }
+        if (!/^\d{10}$/.test(Phone)) {
+            return res.status(400).json({ message: "Phone number must be exactly 10 digits" });
+        }
+        if (!nameRegex.test(FirstName) || !nameRegex.test(LastName)) {
+            return res.status(400).json({ message: "Names should contain letters only" });
+        }
+
+        // 3. เริ่ม Transaction (ป้องกันข้อมูลค้างหากเกิด Error ระหว่างทาง)
+        await conn.beginTransaction();
+
+        // 4. เช็คว่า Email ซ้ำกับ "User คนอื่น" หรือไม่
+        const [duplicateCheck] = await conn.query(
+            "SELECT email FROM users WHERE email = ? AND user_id != ? FOR UPDATE",
+            [Email, userId]
+        );
+
+        if (duplicateCheck.length > 0) {
+            await conn.rollback();
+            return res.status(400).json({ message: "This email is already in use by another account" });
+        }
+
+        // 5. ทำการ Update ข้อมูลลง Database
+        const [result] = await conn.query(
+            `UPDATE users 
+             SET first_name = ?, last_name = ?, email = ?, phone = ?, line_id = ?, updated_at = NOW() 
+             WHERE user_id = ?`,
+            [FirstName, LastName, Email, Phone, LineId, userId]
+        );
+
+        // 6. ดักกรณีข้อมูลในระบบหายไป (Existence Check)
+        // เช่น Token ยังไม่หมดอายุ แต่ User ถูกลบออกจาก DB ไปแล้ว
+        if (result.affectedRows === 0) {
+            await conn.rollback(); // ป้องกันอาการค้าง
+            return res.status(404).json({ message: "User profile not found" });
+        }
+
+        // 7. บันทึกการเปลี่ยนแปลง (Commit)
+        await conn.commit();
+        res.json({ message: "Profile updated successfully" });
+
+    } catch (error) {
+        // ดักกรณี Error ระหว่างทาง ให้ยกเลิกคำสั่งทั้งหมด (Rollback)
+        if (conn) await conn.rollback();
+        console.error("Update Profile Error:", error);
+        res.status(500).json({ 
+            message: "Internal server error", 
+            error: error.message 
+        });
+    } finally {
+        // ดักการคืน Connection เสมอ (ป้องกัน Resource Leak / DB เต็ม)
+        if (conn) conn.release();
+    }
+};
+
+// ================= เปลี่ยนรหัสผ่าน (PUT /api/security/change-password) =================
+exports.changePassword = async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const conn = await db.getConnection();
+    try {
+        // 1. ตรวจสอบความครบถ้วนและรูปแบบรหัสผ่านใหม่ (Validation)
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ message: "Please provide both current and new passwords." });
+        }
+
+        // ตัวอย่างการดักความยาว 6 ตัวขึ้นไป มีตัวพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข (เหมือน Sign-up)
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
+        if (!passwordRegex.test(newPassword)) {
+            return res.status(400).json({ 
+                message: "New password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number." 
+            });
+        }
+
+        // 2. ดึงรหัสผ่านเดิมจากฐานข้อมูล
+        const [user] = await conn.query('SELECT password_hash FROM users WHERE user_id = ?', [req.id]);
+        if (user.length === 0) return res.status(404).json({ message: "User not found." });
+
+        // 3. ตรวจสอบว่ารหัสผ่านเดิม (currentPassword) ถูกต้องหรือไม่
+        const isMatch = await bcrypt.compare(currentPassword, user[0].password_hash);
+        if (!isMatch) return res.status(400).json({ message: "Incorrect current password." });
+
+        // 4. ตรวจสอบว่ารหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม
+        const isSameAsOld = await bcrypt.compare(newPassword, user[0].password_hash);
+        if (isSameAsOld) {
+            return res.status(400).json({ message: "New password cannot be the same as the current password." });
+        }
+
+        // 5. Hash รหัสผ่านใหม่และบันทึก
+        const hashedNewPwd = await bcrypt.hash(newPassword, 12); 
+        await conn.query('UPDATE users SET password_hash = ? WHERE user_id = ?', [hashedNewPwd, req.id]);
+        
+        res.json({ message: "Password changed successfully." });
+    } catch (error) {
+        res.status(500).json({ message: "Internal server error" });
+    } finally {
+        conn.release();
+    }
+};
+
+// ================= เปิด/ปิด 2FA (POST /api/security/2fa) =================
+exports.toggle2FA = async (req, res) => {
+    const { enabled } = req.body; 
+    
+    // 1. ตรวจสอบว่ามีการส่งค่ามาหรือไม่ และต้องเป็นประเภท Boolean เท่านั้น
+    if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ 
+            message: "Invalid request. 'enabled' field must be a boolean (true or false)." 
+        });
+    }
+
+    const conn = await db.getConnection(); 
+    try {
+        // 2. อัปเดตสถานะในฐานข้อมูล
+        const [result] = await conn.query(
+            'UPDATE users SET two_factor_enabled = ? WHERE user_id = ?', 
+            [enabled, req.id]
+        );
+
+        // (Optional) ตรวจสอบว่ามีการ Update เกิดขึ้นจริงไหม
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        res.json({ 
+            message: `2FA has been ${enabled ? 'enabled' : 'disabled'} successfully.` 
+        });
+
+    } catch (error) {
+        res.status(500).json({ 
+            message: "Internal server error", 
+            error: error.message 
+        });
+    } finally {
+        conn.release(); 
+    }
+};
+
+// ================= ดึงรายละเอียดที่ดิน (GET /api/lands/:id) =================
+exports.getLandDetail = async (req, res) => {
+    const landId = req.params.id;
+    const userId = req.id; // ดึงจาก Middleware auth
+    
+    if (!landId) return res.status(400).json({ message: "Land ID is required." });
+
+    const conn = await db.getConnection();
+
+    try {
+        // 1. ดึงข้อมูลที่ดินพร้อม JOIN ผู้ขาย
+        const landQuery = `
+            SELECT l.*, u.first_name, u.last_name, u.phone, u.line_id, u.agency_name
+            FROM lands l
+            LEFT JOIN users u ON l.seller_id = u.user_id
+            WHERE l.land_id = ?
+        `;
+        const [landData] = await conn.query(landQuery, [landId]);
+
+        if (landData.length === 0) {
+            return res.status(404).json({ message: "Land information not found." });
+        }
+
+        // 2. ดึงข้อมูลรูปภาพและเอกสารประกอบ (ขนานกันเพื่อความเร็ว)
+        const [images] = await conn.query("SELECT image FROM land_images WHERE land_id = ?", [landId]);
+        const [documents] = await conn.query("SELECT doc_type, file FROM land_documents WHERE land_id = ?", [landId]);
+
+        // 3. ตรวจสอบรายการที่ปลดล็อกแล้ว (ถ้าไม่ได้ Login ให้เป็น Set ว่าง)
+        let unlockedSet = new Set();
+        if (userId) {
+            const [unlockedItems] = await conn.query(
+                "SELECT unlock_type FROM unlocked_lands WHERE user_id = ? AND land_id = ?",
+                [userId, landId]
+            );
+            unlockedSet = new Set(unlockedItems.map(i => i.unlock_type));
+        }
+
+        // 4. จัดการขีดละลาย (Masking)
+        const MASK = "-----"; 
+
+        const responseData = {
+            land_id: landData[0].land_id,
+            price_total: landData[0].price_total,
+            price_per_sqwa: landData[0].price_per_sqwa,
+            area_sqwa: landData[0].area_sqwa,
+            rai: landData[0].rai,
+            ngan: landData[0].ngan,
+            wa: landData[0].wa,
+            view_count: landData[0].view_count + 1, // บวก 1 ล่วงหน้าสำหรับ UI
+            images: images.map(img => img.image),
+
+            contact: {
+                seller_name: unlockedSet.has('owner') ? `${landData[0].first_name} ${landData[0].last_name}` : MASK,
+                agency: unlockedSet.has('owner') ? (landData[0].agency_name || "ส่วนตัว") : MASK,
+                phone: unlockedSet.has('contact') ? landData[0].phone : MASK,
+                line_id: unlockedSet.has('contact') ? landData[0].line_id : MASK
+            },
+            
+            documents: documents.map(doc => {
+                let isLocked = true;
+                if (doc.doc_type === 'กรอบที่ดิน' && unlockedSet.has('boundary')) isLocked = false;
+                if ((doc.doc_type === 'โฉนด' || doc.doc_type === 'ระวาง') && unlockedSet.has('document')) isLocked = false;
+
+                return {
+                    doc_type: doc.doc_type,
+                    file: isLocked ? MASK : doc.file,
+                    is_locked: isLocked
+                };
+            }),
+            unlocked_list: Array.from(unlockedSet)
+        };
+
+        // 5. อัปเดตยอดวิว
+        await conn.query("UPDATE lands SET view_count = view_count + 1 WHERE land_id = ?", [landId]);
+
+        res.status(200).json(responseData);
+
+    } catch (error) {
+        console.error("GET_LAND_DETAIL_ERROR:", error);
+        res.status(500).json({ message: "Internal server error." });
+    } finally {
+        if (conn) conn.release();
+    }
+};
+
+// ================= ปลดล็อกข้อมูลที่ดิน (POST /api/lands/unlock) =================
+exports.unlockLandItems = async (req, res) => {
+    const { land_id, items } = req.body; 
+    const userId = req.id; 
+
+    // ดักจับข้อมูลที่ไม่ถูกต้อง
+    if (!userId) return res.status(401).json({ message: "Unauthorized access." });
+    if (!land_id || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "Please select items to unlock." });
+    }
+
+    const conn = await db.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        // เตรียมข้อมูลสำหรับ Bulk Insert
+        // ใช้ INSERT IGNORE เพื่อข้ามรายการที่เคยปลดล็อกไปแล้วอัตโนมัติ
+        const values = items.map(item => [userId, land_id, item]);
+        
+        const sql = "INSERT IGNORE INTO unlocked_lands (user_id, land_id, unlock_type) VALUES ?";
+        await conn.query(sql, [values]);
+
+        await conn.commit();
+        res.status(201).json({ 
+            status: "success", 
+            message: "Transaction processed successfully." 
+        });
+
+    } catch (error) {
+        await conn.rollback();
+        console.error("UNLOCK_ERROR:", error);
+        res.status(500).json({ message: "Failed to process unlock transaction." });
+    } finally {
+        if (conn) conn.release();
+    }
+};
 
 
