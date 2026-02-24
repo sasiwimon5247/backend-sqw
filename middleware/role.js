@@ -1,26 +1,20 @@
-module.exports = (...allowedRoles) => {
+module.exports = (roles) => {
+  // ทำให้มั่นใจว่าเป็น Array เสมอ ไม่ว่าจะส่งมาท่าไหน
+  const allowedRoles = Array.isArray(roles) ? roles : [roles];
+
   return (req, res, next) => {
-    // 1. ตรวจสอบว่ามีข้อมูล user จาก auth middleware หรือไม่
-    // (เราใช้ req.user เพราะใน auth.js เราสั่ง req.user = decoded ไว้)
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
-    // 2. ดึง Role ออกมา 
-    // แก้ไข: จากเดิมที่เช็คหลายตลบ ให้ดึงจาก req.role หรือ req.user.role โดยตรง
-    // เพราะใน login คุณฝังมาเป็น String ตัวเดียว (เช่น "admin", "buyer")
     const userRole = req.role || req.user.role;
-
-    // 3. เช็คสิทธิ์
-    // allowedRoles คือค่าที่เราส่งเข้าไปตอนเรียกใช้ เช่น checkRole('admin', 'agent')
-    const hasPermission = allowedRoles.includes(userRole);
+    
+    // ใช้ lowercase เพื่อป้องกันปัญหาตัวพิมพ์เล็ก-ใหญ่
+    const hasPermission = allowedRoles.some(r => r.toLowerCase() === userRole.toLowerCase());
 
     if (!hasPermission) {
       return res.status(403).json({ 
         error: `Access denied: Your role (${userRole}) is not authorized` 
       });
     }
-
     next();
   };
 };

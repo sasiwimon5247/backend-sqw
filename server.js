@@ -15,7 +15,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- Routes ---
 const authRoutes = require("./routes/auth.routes");
-app.use("/api/auth", authRoutes);
+const landRoutes = require("./routes/land.routes"); 
+
+app.use("/api/auth", authRoutes); // สำหรับ Signup, Login, Profile
+app.use("/api/lands", landRoutes); // สำหรับข้อมูลที่ดินและการปลดล็อก (API จะดูคลีนกว่ามาก)
 
 // Test route สำหรับเช็คสถานะระบบ
 app.get("/", (req, res) => {
